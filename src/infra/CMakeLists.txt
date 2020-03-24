@@ -17,6 +17,8 @@ add_subdirectory(raft)
 
 # Source files
 set(INFRA_SRC
+        api.cpp
+        apiClasses.cpp
         es/store/RaftCommandEventStore.cpp
         es/store/ReadonlyRaftCommandEventStore.cpp
         es/store/ReadonlySQLiteCommandEventStore.cpp
