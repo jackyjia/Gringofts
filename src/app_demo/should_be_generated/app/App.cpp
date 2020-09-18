@@ -22,15 +22,9 @@ limitations under the License.
 #include "../../../infra/es/store/ReadonlyRaftCommandEventStore.h"
 #include "../../../infra/es/store/ReadonlySQLiteCommandEventStore.h"
 #include "../../../infra/es/store/SQLiteCommandEventStore.h"
-#include "../../../infra/monitor/Monitorable.h"
-#include "../../../infra/monitor/santiago/metrics_collector.h"
-#include "../../../infra/raft/metrics/RaftMonitorAdaptor.h"
+#include "../../../infra/monitor/MonitorCenter.h"
 #include "../../../infra/raft/RaftBuilder.h"
-
-namespace {
-using ::santiago::MetricsMonitor;
-using ::santiago::MetricsCollector;
-}
+#include "../../../infra/raft/metrics/RaftMonitorAdaptor.h"
 
 namespace gringofts {
 namespace demo {
@@ -75,9 +69,9 @@ App::App(const char *configPath) : mIsShutdown(false) {
         snapshotDir);
   } else if (appVersion == "v2") {
     mEventApplyLoop =
-        std::make_shared<app::EventApplyLoop<v2::AppStateMachine>>(
+        std::make_shared<app::EventApplyLoop<v2::RocksDBBackedAppStateMachine>>(
             reader, commandEventDecoder, std::move(mReadonlyCommandEventStoreForEventApplyLoop), snapshotDir);
-    mCommandProcessLoop = std::make_unique<CommandProcessLoop<v2::AppStateMachine>>(
+    mCommandProcessLoop = std::make_unique<CommandProcessLoop<v2::MemoryBackedAppStateMachine>>(
         reader,
         commandEventDecoder,
         mDeploymentMode,
@@ -117,7 +111,7 @@ void App::initDeploymentMode(const INIReader &reader) {
 void App::initMonitor(const INIReader &reader) {
   int monitorPort = reader.GetInteger("monitor", "port", -1);
   assert(monitorPort > 0);
-  MetricsMonitor::Instance(monitorPort).init();
+  auto &server = gringofts::getMonitorServer("0.0.0.0", monitorPort);
 
   auto &appInfo = Singleton<santiago::AppInfo>::getInstance();
   auto appName = "demoApp";
@@ -128,7 +122,7 @@ void App::initMonitor(const INIReader &reader) {
   auto startTime = TimeUtil::currentTimeInNanos();
   appInfo.gauge("start_time_guage", {}).set(startTime);
 
-  MetricsMonitor::Instance().registry(appInfo.getRegistryPtr());
+  server.Registry(appInfo);
   SPDLOG_INFO("Init monitor with app name : {} , app version : {}, app env : {}, start time : {}",
               appName,
               appVersion,
@@ -177,7 +171,7 @@ void App::initCommandEventStore(const INIReader &reader) {
 
     std::shared_ptr<app::CommandEventDecoderImpl<EventDecoderImpl, CommandDecoderImpl>> commandEventDecoder =
         std::make_shared<app::CommandEventDecoderImpl<EventDecoderImpl, CommandDecoderImpl>>();
-    auto raftImpl = raft::buildRaftImpl(configPath.c_str());
+    auto raftImpl = raft::buildRaftImpl(configPath.c_str(), std::nullopt);
     auto metricsAdaptor = std::make_shared<RaftMonitorAdaptor>(raftImpl);
     enableMonitorable(metricsAdaptor);
     mCommandEventStore = std::make_shared<RaftCommandEventStore>(raftImpl, mCrypto);

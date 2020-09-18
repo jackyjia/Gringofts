@@ -24,6 +24,7 @@ limitations under the License.
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <absl/strings/str_cat.h>
 #include <boost/filesystem.hpp>
 #include <boost/iostreams/device/file_descriptor.hpp>
 #include <boost/iostreams/stream.hpp>
@@ -102,14 +103,20 @@ class FileUtil final {
     namespace fs = boost::filesystem;
     namespace io = boost::iostreams;
 
-    fs::path filePath(fileName);
+    const auto &tmpFileName = absl::StrCat(fileName, ".tmp");
+    fs::path filePath(tmpFileName);
     io::stream<io::file_descriptor_sink> file(filePath);
 
     file << content;
     file.flush();
 
     /// sync to disk
-    ::fdatasync(file->handle());
+#ifdef MAC_OS
+    assert(0 == ::fsync(file->handle()));
+#else
+    assert(0 == ::fdatasync(file->handle()));
+#endif
+    assert(0 == ::rename(tmpFileName.c_str(), fileName.c_str()));
   }
 
   /**
@@ -133,6 +140,34 @@ class FileUtil final {
       if (fs::is_regular_file(iter->path())) {
         std::string fileName = iter->path().string();
         buffer.push_back(std::move(fileName));
+      }
+      ++iter;
+    }
+
+    return buffer;
+  }
+
+  /**
+   * List names of directories under specified dir.
+   */
+  static std::vector<std::string> listDirs(const std::string &dir_) {
+    namespace fs = boost::filesystem;
+
+    fs::path dir(dir_);
+    if (!fs::is_directory(dir)) {
+      SPDLOG_WARN("dir '{}' is not a directory.", dir_);
+      return {};
+    }
+
+    std::vector<std::string> buffer;
+
+    fs::directory_iterator iter(dir);
+    fs::directory_iterator end;
+
+    while (iter != end) {
+      if (fs::is_directory(iter->path())) {
+        std::string dirName = iter->path().string();
+        buffer.push_back(std::move(dirName));
       }
       ++iter;
     }
@@ -258,6 +293,16 @@ class FileUtil final {
    * @param fileName name of the file
    */
   static void syncFile(const std::string &fileName) {
+#ifdef MAC_OS
+    int fd = ::open(fileName.c_str(), O_RDONLY);
+    assert(fd != -1);
+
+    /// sync to disk
+    ::fsync(fd);
+
+    /// do not forget to close the fd
+    ::close(fd);
+#else
     int fd = ::open64(fileName.c_str(), O_RDONLY);
     assert(fd != -1);
 
@@ -266,6 +311,7 @@ class FileUtil final {
 
     /// do not forget to close the fd
     ::close(fd);
+#endif
   }
 
   static void checkFileState(std::ifstream &ifs) {

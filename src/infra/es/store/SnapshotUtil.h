@@ -41,9 +41,10 @@ class SnapshotUtil {
    * @param crypto the instance used to encrypt snapshot
    * @return <true, path of snapshot file> if succeed, false otherwise
    */
+  template<typename StateMachineType>
   static std::pair<bool, std::string> takeSnapshotAndPersist(uint64_t currentOffset,
                                                              const std::string &snapshotDir,
-                                                             const StateMachine &stateMachine,
+                                                             const StateMachineType &stateMachine,
                                                              CryptoUtil &crypto) noexcept {  // NOLINT [runtime/references]
     auto offset = currentOffset;
     const auto &snapshotFilePath = snapshotDir + "/" + std::to_string(offset) + kSnapshotSuffix;
@@ -84,8 +85,9 @@ class SnapshotUtil {
    * @param crypto the instance used to decrypt snapshot
    * @return the read offset in the snapshot if succeed, std::nullopt otherwise
    */
+  template<typename StateMachineType>
   static std::optional<uint64_t> loadLatestSnapshot(const std::string &snapshotDir,
-                                                    StateMachine &stateMachine,  // NOLINT [runtime/references]
+                                                    StateMachineType &stateMachine,  // NOLINT [runtime/references]
                                                     const CommandDecoder &commandDecoder,
                                                     const EventDecoder &eventDecoder,
                                                     CryptoUtil &crypto) noexcept {  // NOLINT [runtime/references]
@@ -126,6 +128,33 @@ class SnapshotUtil {
     fileName.resize(fileName.size() - std::string(kSnapshotSuffix).size());
     uint64_t offset = std::stoull(fileName);
     return offset;
+  }
+
+  /**
+   * Given checkpoint Dir, return offset of latest checkpoint
+   */
+  static std::optional<uint64_t> findLatestCheckpointOffset(const std::string &checkpointDir) noexcept {
+    std::regex checkpointRegex("([0-9]+)\\.[0-9]+\\.checkpoint$");
+    std::smatch checkpointMatch;
+
+    int64_t largestIndex = -1;
+    auto dirNames = FileUtil::listDirs(checkpointDir);
+
+    for (const auto &dirName : dirNames) {
+      if (std::regex_search(dirName, checkpointMatch, checkpointRegex)) {
+        int64_t index = std::stoll(checkpointMatch[1]);
+
+        SPDLOG_INFO("dir {} match checkpoint pattern by {}, with index {}.",
+                    dirName, checkpointMatch.str(0), index);
+
+        if (index > largestIndex) {
+          largestIndex = index;
+        }
+      }
+    }
+
+    return largestIndex != -1 ? std::optional<uint64_t>(largestIndex)
+                              : std::nullopt;
   }
 
  private:

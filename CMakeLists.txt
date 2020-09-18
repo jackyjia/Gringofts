@@ -5,11 +5,8 @@ set(Gringofts_VERSION_MINOR 0)
 
 MESSAGE(STATUS "compiler is: " ${CMAKE_CXX_COMPILER_ID})
 
-# boost
-find_package(Boost COMPONENTS system filesystem REQUIRED)
-
 ## Unit test
-if (${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang")
+if (${CMAKE_CXX_COMPILER_ID} MATCHES "^(Apple)?Clang$")
     include(cmake/clang-6/CodeCoverage.cmake)
 elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
     include(cmake/g++-7/CodeCoverage.cmake)
@@ -41,11 +38,25 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/build)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/build)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/build)
 
-if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
+
+
+if (${CMAKE_CXX_COMPILER_ID} MATCHES "^(Apple)?Clang$")
 
     ## clang will always use c++17 as std
     set(CPP_STD c++17)
-
+    # special for MAC OS
+    if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang")
+        include_directories(SYSTEM /usr/local/include)
+        link_directories(/usr/local/lib)
+        add_compile_definitions(MAC_OS)
+        set(CMAKE_THREAD_LIBS_INIT "-lpthread")
+        set(CMAKE_HAVE_THREADS_LIBRARY 1)
+        set(CMAKE_USE_PTHREADS_INIT 1)
+        set(THREADS_PREFER_PTHREAD_FLAG ON)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Qunused-arguments")
+        # mac os not support -static-libgcc -static-libstdc++
+        unset(CMAKE_EXE_LINKER_FLAGS)
+    endif()
     set(FLAG_LIST
             -Wno-c++98-compat-pedantic
             -Wno-covered-switch-default
@@ -180,12 +191,28 @@ include_directories(third_party/spdlog/include)
 include_directories(third_party/inih/cpp)
 
 # abseil-cpp
-find_package(absl CONFIG REQUIRED)
+set(CMAKE_CXX_STANDARD 17)
+add_subdirectory(third_party/abseil-cpp EXCLUDE_FROM_ALL)
+include_directories(third_party/abseil-cpp)
+set(ABSL_LIBS absl::strings absl::base)
 
-set(MONITOR_LIBS
-        prometheus-cpp-push
-        prometheus-cpp-pull
-        prometheus-cpp-core)
+# prometheus
+add_subdirectory(third_party/prometheus-cpp EXCLUDE_FROM_ALL)
+include_directories(third_party/prometheus-cpp/core/include)
+include_directories(third_party/prometheus-cpp/pull/include)
+set(MONITOR_LIBS prometheus-cpp::pull prometheus-cpp::core)
+
+# boost
+find_package(Boost COMPONENTS system filesystem thread iostreams REQUIRED)
+INCLUDE_DIRECTORIES(${Boost_INCLUDE_DIRS})
+
+# openssl
+find_package(OpenSSL COMPONENTS Crypto SSL REQUIRED)
+include_directories(${OPENSSL_INCLUDE_DIR})
+# TODO Fix version of OpenSSL::Crypto
+set(OPENSSL_LIBS
+        OpenSSL::SSL
+        OpenSSL::Crypto)
 
 set(ROCKSDB_LIBS
         rocksdb.a
@@ -215,26 +242,11 @@ function(check_lib_exist LIB_NAME)
 endfunction(check_lib_exist)
 
 check_lib_exist(pthread)
-check_lib_exist(rt)
 check_lib_exist(sqlite3)
 
-# TODO: Fix version of OpenSSL::Crypto
-set(OPENSSL_LIBS
-        OpenSSL::SSL
-        OpenSSL::Crypto)
-
-set(BOOST_LIBS
-        boost_system.a
-        boost_thread.a
-        boost_filesystem.a
-        boost_iostreams.a)
-
-set(ABSL_LIBS
-        absl_strings.a
-        absl_base.a)
 
 # collect all libs when they all exist
-set(LIBRARIES pthread rt sqlite3.a dl ${ABSL_LIBS} ${OPENSSL_LIBS} ${BOOST_LIBS}
+set(GRINGOFTS_LIBRARIES pthread sqlite3.a dl ${ABSL_LIBS} ${OPENSSL_LIBS} ${Boost_LIBRARIES}
         ${MONITOR_LIBS} ${ROCKSDB_LIBS} ${_GRPC_GRPCPP} ${_PROTOBUF_LIBPROTOBUF} lib_inih)
 
 # Protobuf build by cmake
@@ -246,12 +258,28 @@ add_subdirectory(src/app_demo)
 
 add_subdirectory(test)
 
+# expose to parent
+get_directory_property(hasParent PARENT_DIRECTORY)
+if(hasParent)
+    message(STATUS "Gringofts as a library")
+    set(GRINGOFTS_INCL
+            Gringofts/src
+            Gringofts/test
+            Gringofts/third_party/abseil-cpp
+            Gringofts/third_party/prometheus-cpp/core/include
+            Gringofts/third_party/prometheus-cpp/pull/include
+            Gringofts/third_party/spdlog/include
+            Gringofts/third_party/inih/cpp PARENT_SCOPE)
+    set(GRINGOFTS_LIB ${GRINGOFTS_LIBRARIES} PARENT_SCOPE)
+endif()
+
+
 set(ALL_SRC
         src
         test)
 
 # custom targets
-add_custom_target(check
+add_custom_target(gringofts_check
         COMMAND third_party/cpplint/cpplint.py --recursive ${ALL_SRC} 2>&1 > /var/tmp/cpplint.out)
-add_custom_target(docs
+add_custom_target(gringofts_docs
         COMMAND doxygen docs/Doxyfile)
